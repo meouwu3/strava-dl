@@ -23,7 +23,7 @@ strava-dl --cookie 'name=value; ...' 135539874
 
 Cookie values contain `;`. Always quote them in the shell.
 
-Progress is two bars on stderr: `Scanning` with the current page, `Downloading` with current/total. Scan and download each end with `N photos, N videos`. Scan errors print `Scan failed.` plus the reason; download errors print `Download failed.` plus the reason.
+Progress is two bars on stderr: `Scanning` with the current page, `Downloading` with current/total. After a successful download it prints `N photos, N videos`. Scan errors print `Scan failed.` plus the reason; download errors print `Download failed.` plus the reason.
 
 Strava shows newest media first. Files are numbered oldest first, photos and videos together, so `001` is the earliest:
 

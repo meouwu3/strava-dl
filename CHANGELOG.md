@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.9
+
+- Print `N photos, N videos` only after a successful download, not after scanning.
+
 ## 0.3.8
 
 - Print `N photos, N videos` after scanning and after downloading. No `Saved` prefix.

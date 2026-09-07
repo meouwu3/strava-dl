@@ -58,7 +58,6 @@ fn run_inner() -> Result<(), (Stage, anyhow::Error)> {
     }
     let photos = items.iter().filter(|item| item.kind == "image").count();
     let videos = items.iter().filter(|item| item.kind == "video").count();
-    progress::counts(photos, videos);
     if !authenticated {
         eprintln!("warning: no --cookie or --token; athlete photos usually require login");
     }

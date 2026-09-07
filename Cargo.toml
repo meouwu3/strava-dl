@@ -1,6 +1,6 @@
 [package]
 name = "strava-dl"
-version = "0.3.8"
+version = "0.3.9"
 default-run = "strava-dl"
 edition = "2021"
 rust-version = "1.74"
