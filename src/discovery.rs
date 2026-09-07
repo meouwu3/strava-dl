@@ -81,6 +81,8 @@ pub fn discover(fetcher: &dyn Fetcher, opts: &DiscoverOpts<'_>) -> Result<Vec<Me
     if let Some(max) = opts.max_items {
         items.truncate(max);
     }
+    // Strava returns newest first. Number files oldest-first so 001 is the earliest.
+    items.reverse();
     Ok(items)
 }
 
@@ -161,7 +163,7 @@ mod tests {
         };
         let items = discover(&fetcher, &opts).unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].kind, "image");
-        assert_eq!(items[1].kind, "video");
+        assert_eq!(items[0].kind, "video");
+        assert_eq!(items[1].kind, "image");
     }
 }

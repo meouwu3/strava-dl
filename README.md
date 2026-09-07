@@ -23,7 +23,7 @@ strava-dl --cookie 'name=value; ...' 135539874
 
 Cookie values contain `;`. Always quote them in the shell.
 
-Files are numbered in gallery order, photos and videos together:
+Strava shows newest media first. Files are numbered oldest first, photos and videos together, so `001` is the earliest:
 
 ```text
 strava-135539874/

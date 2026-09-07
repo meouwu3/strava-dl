@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.4
+
+- Number files oldest first. Strava lists newest media first; `strava-{id}-001` is the earliest item.
+
 ## 0.3.3
 
 - Discover media from the athlete Photos lightbox API (`/athletes/{id}/photos?cursor=`) instead of the incomplete activity list.
