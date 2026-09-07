@@ -110,3 +110,7 @@ pub fn looks_like_media(bytes: &[u8]) -> bool {
     }
     !bytes.starts_with(b"<") && !bytes.starts_with(b"{") && !bytes.starts_with(b"[")
 }
+
+pub fn is_iso_mp4(bytes: &[u8]) -> bool {
+    bytes.len() >= 8 && bytes.get(4..8) == Some(b"ftyp")
+}

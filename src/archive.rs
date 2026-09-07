@@ -6,7 +6,7 @@ use std::{
 };
 use zip::{write::SimpleFileOptions, ZipWriter};
 
-use crate::client::{looks_like_media, Fetcher};
+use crate::client::{is_iso_mp4, looks_like_media, Fetcher};
 use crate::hls;
 use crate::model::{ArchivePlan, Media, Output};
 use crate::progress::DownloadBar;
@@ -60,12 +60,19 @@ fn download_item(fetcher: &dyn Fetcher, item: &Media) -> Result<Vec<u8>> {
             Ok(bytes)
                 if looks_like_media(&bytes) || (item.kind == "video" && !bytes.is_empty()) =>
             {
-                let better = best.as_ref().map(|b| bytes.len() > b.len()).unwrap_or(true);
+                let better = match best.as_deref() {
+                    None => true,
+                    Some(prev) => {
+                        container_rank(&bytes) > container_rank(prev)
+                            || (container_rank(&bytes) == container_rank(prev)
+                                && bytes.len() > prev.len())
+                    }
+                };
                 if better {
                     best = Some(bytes);
                 }
                 let n = best.as_ref().map(Vec::len).unwrap_or(0);
-                if item.kind == "video" && n > 100_000 {
+                if item.kind == "video" && best.as_deref().is_some_and(is_iso_mp4) && n > 100_000 {
                     break;
                 }
                 if item.kind == "image" && n >= 80_000 {
@@ -79,6 +86,16 @@ fn download_item(fetcher: &dyn Fetcher, item: &Media) -> Result<Vec<u8>> {
     best.ok_or_else(|| {
         last_error.unwrap_or_else(|| anyhow::anyhow!("no download URL for {}", item.url))
     })
+}
+
+fn container_rank(bytes: &[u8]) -> u8 {
+    if is_iso_mp4(bytes) {
+        2
+    } else if bytes.first() == Some(&0x47) {
+        0
+    } else {
+        1
+    }
 }
 
 fn unique_path(root: &Path, filename: &str) -> PathBuf {
@@ -240,5 +257,42 @@ mod tests {
         let bytes = std::fs::read(root.join("strava-1-001.jpg")).unwrap();
         assert!(bytes.len() > 80_000);
         assert_eq!(bytes[4], 2);
+    }
+
+    #[test]
+    fn prefers_iso_mp4_over_mpeg_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ts = vec![0x47u8, 0x40, 0x00, 0x30];
+        ts.extend([0u8; 200_000]);
+        let mut mp4 = b"\0\0\0 ftypisom".to_vec();
+        mp4.extend([9u8; 120_000]);
+        let fetcher = MapFetcher {
+            bytes: HashMap::from([
+                ("https://cdn.example/clip.ts".into(), ts),
+                (
+                    "https://stream.mux.com/abc1234567/high.mp4".into(),
+                    mp4.clone(),
+                ),
+            ]),
+        };
+        let plan = ArchivePlan {
+            athlete_id: "1".into(),
+            output: Output::Folder,
+            output_dir: dir.path().to_path_buf(),
+            items: vec![Media::with_candidates(
+                "video",
+                vec![
+                    "https://cdn.example/clip.ts".into(),
+                    "https://stream.mux.com/abc1234567/high.mp4".into(),
+                ],
+                "https://www.strava.com/athletes/1".into(),
+                "strava-1-001.mp4".into(),
+                None,
+            )],
+        };
+        let root = write_archive(&fetcher, &plan).unwrap();
+        let bytes = std::fs::read(root.join("strava-1-001.mp4")).unwrap();
+        assert_eq!(&bytes[4..8], b"ftyp");
+        assert_eq!(bytes[12], 9);
     }
 }

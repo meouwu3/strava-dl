@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.6
+
+- Download Mux videos from `stream.mux.com/{id}/high.mp4` instead of concatenating HLS transport streams into a fake `.mp4`.
+
 ## 0.3.5
 
 - Show a scan progress bar with the current page, and a download progress bar with current/total.

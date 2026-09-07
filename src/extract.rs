@@ -279,15 +279,56 @@ pub fn photo_candidates(urls: &[String]) -> Vec<String> {
     })
 }
 
+const MUX_HOST: &str = "stream.mux.com";
+const MUX_MP4_RENDITIONS: &[&str] = &[
+    "high.mp4",
+    "highest.mp4",
+    "capped-1080p.mp4",
+    "medium.mp4",
+    "low.mp4",
+];
+
 pub fn video_mp4_url(url: &str) -> Option<String> {
     let url = unescape_url(url);
     let parsed = url::Url::parse(&url).ok()?;
     let host = parsed.host_str()?;
+    if host.eq_ignore_ascii_case(MUX_HOST) {
+        let id = mux_playback_id_from_path(parsed.path())?;
+        return Some(format!("https://{MUX_HOST}/{id}/high.mp4"));
+    }
     let hash = video_hash(parsed.path())?;
     Some(format!(
         "{scheme}://{host}/{hash}/{hash}.mp4",
         scheme = parsed.scheme()
     ))
+}
+
+fn mux_playback_id(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(&unescape_url(url)).ok()?;
+    if !parsed.host_str()?.eq_ignore_ascii_case(MUX_HOST) {
+        return None;
+    }
+    mux_playback_id_from_path(parsed.path())
+}
+
+fn mux_playback_id_from_path(path: &str) -> Option<String> {
+    let first = path
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .filter(|s| !s.is_empty())?;
+    let id = first.split('.').next().filter(|s| !s.is_empty())?;
+    (id.len() >= 8).then(|| id.to_string())
+}
+
+fn mux_mp4_urls(url: &str) -> Vec<String> {
+    let Some(id) = mux_playback_id(url) else {
+        return Vec::new();
+    };
+    MUX_MP4_RENDITIONS
+        .iter()
+        .map(|name| format!("https://{MUX_HOST}/{id}/{name}"))
+        .collect()
 }
 
 fn video_hash(path: &str) -> Option<&str> {
@@ -322,6 +363,7 @@ fn video_hash(path: &str) -> Option<&str> {
 pub fn video_candidates(urls: &[String]) -> Vec<String> {
     let mut expanded = Vec::new();
     for url in urls {
+        expanded.extend(mux_mp4_urls(url));
         if let Some(mp4) = video_mp4_url(url) {
             expanded.push(mp4);
         }
@@ -331,19 +373,32 @@ pub fn video_candidates(urls: &[String]) -> Vec<String> {
         if media_kind(url) != Some("video") {
             return None;
         }
-        let path = unescape_url(url).to_ascii_lowercase();
-        let rank = if [".mp4", ".mov", ".webm"]
-            .iter()
-            .any(|ext| path.contains(ext))
-        {
-            3
-        } else if path.contains(".m3u8") {
-            2
-        } else {
-            1
-        };
-        Some(rank)
+        Some(video_quality_rank(url))
     })
+}
+
+fn video_quality_rank(url: &str) -> u64 {
+    let path = unescape_url(url).to_ascii_lowercase();
+    if path.contains("/high.mp4") {
+        8
+    } else if path.contains("/highest.mp4") {
+        7
+    } else if path.contains("/capped-1080p.mp4") {
+        6
+    } else if path.contains("/medium.mp4") {
+        5
+    } else if path.contains("/low.mp4") {
+        4
+    } else if [".mp4", ".mov", ".webm"]
+        .iter()
+        .any(|ext| path.contains(ext))
+    {
+        3
+    } else if path.contains(".m3u8") {
+        2
+    } else {
+        1
+    }
 }
 
 pub fn media_key(url: &str) -> String {
@@ -429,7 +484,10 @@ pub fn is_strava_media_url(url: &str) -> bool {
     }
     let path = parsed.path().to_ascii_lowercase();
     let host_l = host.to_ascii_lowercase();
-    if host_l.contains("cloudfront.net") || host_l.ends_with(".strava.com") {
+    if host_l.contains("cloudfront.net")
+        || host_l.ends_with(".strava.com")
+        || host_l.eq_ignore_ascii_case(MUX_HOST)
+    {
         return is_media_path(&path);
     }
     false
@@ -975,6 +1033,20 @@ mod tests {
             candidates[0],
             "https://d35tn3x5zm6xrc.cloudfront.net/clipHash/clipHash.mp4"
         );
+        assert!(candidates.iter().any(|u| u.ends_with(".m3u8")));
+    }
+
+    #[test]
+    fn mux_videos_use_high_mp4_rendition() {
+        let hls = "https://stream.mux.com/nObosHrW4bWJwtnxQ801zPVOAU01n9xPVBHo6dWvNQmss.m3u8";
+        let candidates = video_candidates(&[hls.into()]);
+        assert_eq!(
+            candidates[0],
+            "https://stream.mux.com/nObosHrW4bWJwtnxQ801zPVOAU01n9xPVBHo6dWvNQmss/high.mp4"
+        );
+        assert!(!candidates.iter().any(|u| u.contains(
+            "/nObosHrW4bWJwtnxQ801zPVOAU01n9xPVBHo6dWvNQmss/nObosHrW4bWJwtnxQ801zPVOAU01n9xPVBHo6dWvNQmss.mp4"
+        )));
         assert!(candidates.iter().any(|u| u.ends_with(".m3u8")));
     }
 
