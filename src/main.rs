@@ -97,7 +97,7 @@ fn main() -> Result<()> {
         }
         let filename = url
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("media.bin")
             .split('?')
             .next()
