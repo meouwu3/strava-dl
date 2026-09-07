@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.7
+
+- Use English progress labels: `Scanning` with page, `Downloading` with current/total.
+- Print `Saved N files.` on success. Print `Scan failed.` or `Download failed.` plus the error reason.
+
 ## 0.3.6
 
 - Download Mux videos from `stream.mux.com/{id}/high.mp4` instead of concatenating HLS transport streams into a fake `.mp4`.

@@ -64,7 +64,11 @@ impl ScanBar {
             return;
         }
         self.drawn = true;
-        draw(&format!("扫描 {} {page}", bounce_bar(page)));
+        draw(&format!(
+            "{:<11} {} page {page}",
+            "Scanning",
+            bounce_bar(page)
+        ));
     }
 
     pub fn finish(self) {
@@ -93,7 +97,8 @@ impl DownloadBar {
         }
         self.drawn = true;
         draw(&format!(
-            "下载 {} {current}/{}",
+            "{:<11} {} {current}/{}",
+            "Downloading",
             ratio_bar(current, self.total),
             self.total
         ));
@@ -106,13 +111,25 @@ impl DownloadBar {
     }
 }
 
-pub fn complete() {
-    eprintln!("下载完成");
+pub fn complete(count: usize) {
+    eprintln!("Saved {count} files.");
 }
 
-pub fn fail() {
+pub fn scan_failed(reason: &str) {
+    fail("Scan failed.", reason);
+}
+
+pub fn download_failed(reason: &str) {
+    fail("Download failed.", reason);
+}
+
+fn fail(status: &str, reason: &str) {
     eprint!("\r\x1b[K");
-    eprintln!("下载失败");
+    eprintln!("{status}");
+    let reason = reason.trim();
+    if !reason.is_empty() {
+        eprintln!("{reason}");
+    }
 }
 
 #[cfg(test)]
