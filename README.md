@@ -13,12 +13,28 @@ sdl 135539874
 
 Files are written to `~/Downloads/strava-<athlete-id>/` by default. Use `--output-dir` to change the destination. `--output zip` creates a ZIP archive instead. Each archive includes `manifest.json`.
 
-Strava may require an authenticated session for activity media. Pass the browser Cookie header with `--cookie`, or use `STRAVA_COOKIE`. An OAuth API token can be supplied with `--token` or `STRAVA_ACCESS_TOKEN`.
+Without authentication, only publicly visible profile media is available. Activity photos and videos require a logged-in session:
 
 ```bash
-STRAVA_COOKIE='name=value; ...' strava-dl 135539874
-STRAVA_ACCESS_TOKEN='...' strava-dl 135539874
+strava-dl --cookie 'name=value; ...' 135539874
 ```
+
+`--cookie` / `STRAVA_COOKIE` is the browser Cookie header. `--token` / `STRAVA_ACCESS_TOKEN` is a Strava OAuth access token and is only useful for the authenticated athlete's own activities. `--csrf` / `STRAVA_CSRF_TOKEN` is optional and used for XHR calendar requests.
+
+Cookie values contain `;`. Always quote them in the shell.
+
+Activity media is grouped by activity id:
+
+```text
+strava-135539874/
+  manifest.json
+  profile.jpg
+  18437723885/
+    photo-01.jpg
+    video-01.ts
+```
+
+HLS videos are saved as concatenated `.ts` files. Remux with `ffmpeg -i video-01.ts -c copy video-01.mp4` if you need MP4.
 
 ## Development
 
