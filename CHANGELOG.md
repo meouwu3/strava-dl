@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.8
+
+- Print `N photos, N videos` after scanning and after downloading. No `Saved` prefix.
+
 ## 0.3.7
 
 - Use English progress labels: `Scanning` with page, `Downloading` with current/total.

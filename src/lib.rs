@@ -56,10 +56,12 @@ fn run_inner() -> Result<(), (Stage, anyhow::Error)> {
             anyhow!("no accessible media found; Strava privacy or login may be required"),
         ));
     }
+    let photos = items.iter().filter(|item| item.kind == "image").count();
+    let videos = items.iter().filter(|item| item.kind == "video").count();
+    progress::counts(photos, videos);
     if !authenticated {
         eprintln!("warning: no --cookie or --token; athlete photos usually require login");
     }
-    let count = items.len();
     let plan = ArchivePlan {
         athlete_id: args.athlete_id,
         output: args.output.into(),
@@ -67,6 +69,6 @@ fn run_inner() -> Result<(), (Stage, anyhow::Error)> {
         items,
     };
     write_archive(&client, &plan).map_err(|err| (Stage::Download, err))?;
-    progress::complete(count);
+    progress::counts(photos, videos);
     Ok(())
 }

@@ -111,8 +111,18 @@ impl DownloadBar {
     }
 }
 
-pub fn complete(count: usize) {
-    eprintln!("Saved {count} files.");
+pub fn counts(photos: usize, videos: usize) {
+    eprintln!("{}", format_counts(photos, videos));
+}
+
+fn format_counts(photos: usize, videos: usize) -> String {
+    format!(
+        "{} {}, {} {}",
+        photos,
+        if photos == 1 { "photo" } else { "photos" },
+        videos,
+        if videos == 1 { "video" } else { "videos" },
+    )
 }
 
 pub fn scan_failed(reason: &str) {
@@ -153,5 +163,12 @@ mod tests {
             ratio_bar(5, 10),
             format!("[{}>{}]", "=".repeat(10), " ".repeat(9))
         );
+    }
+
+    #[test]
+    fn format_counts_pluralizes() {
+        assert_eq!(format_counts(182, 27), "182 photos, 27 videos");
+        assert_eq!(format_counts(1, 1), "1 photo, 1 video");
+        assert_eq!(format_counts(0, 3), "0 photos, 3 videos");
     }
 }
