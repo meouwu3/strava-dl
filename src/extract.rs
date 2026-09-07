@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::model::Media;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -151,6 +153,9 @@ pub fn highres_photo_urls(url: &str) -> Vec<String> {
     let Some((w, h)) = size_from_url(&unescaped) else {
         return vec![unescaped];
     };
+    if w.max(h) >= 1536 {
+        return vec![unescaped];
+    }
     let Some((prefix, ext)) = split_photo_prefix_ext(&unescaped) else {
         return vec![unescaped];
     };
@@ -244,9 +249,23 @@ fn parse_wxh(value: &str) -> Option<(u64, u64)> {
 }
 
 pub fn photo_candidates(urls: &[String]) -> Vec<String> {
+    let already_large = urls.iter().any(|url| {
+        size_from_url(url)
+            .map(|(w, h)| w.max(h) >= 1536)
+            .unwrap_or(false)
+    });
     let mut expanded = Vec::new();
     for url in urls {
-        expanded.extend(highres_photo_urls(url));
+        if already_large {
+            if size_from_url(url)
+                .map(|(w, h)| w.max(h) >= 1536)
+                .unwrap_or(false)
+            {
+                expanded.push(unescape_url(url));
+            }
+        } else {
+            expanded.extend(highres_photo_urls(url));
+        }
     }
     rank_urls(&expanded, |url| {
         if is_athlete_avatar_url(url)
@@ -442,11 +461,6 @@ pub fn media_kind(url: &str) -> Option<&'static str> {
         return Some("image");
     }
     None
-}
-
-pub fn media_from_html(html: &str, source: &str, activity_id: Option<&str>) -> Vec<Media> {
-    let activity_id = activity_id.unwrap_or("photos");
-    media_from_page(html, source, activity_id)
 }
 
 pub fn media_from_activity_html(html: &str, activity_id: &str) -> Vec<Media> {
@@ -759,6 +773,108 @@ pub fn photos_from_api(value: &Value, activity_id: &str) -> Vec<Media> {
     items
 }
 
+pub struct GalleryPage {
+    pub items: Vec<Media>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+pub fn parse_gallery_html(html: &str) -> Option<GalleryPage> {
+    let idx = html.find("data-react-class=\"MediaThumbnailList\"")?;
+    let rest = &html[idx..];
+    let key = "data-react-props=\"";
+    let start = rest.find(key)? + key.len();
+    let end = rest[start..].find('"')?;
+    let encoded = &rest[start..start + end];
+    let decoded = encoded
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&amp;", "&");
+    parse_gallery_json(&decoded)
+}
+
+pub fn parse_gallery_json(text: &str) -> Option<GalleryPage> {
+    let value: Value = serde_json::from_str(text.trim()).ok()?;
+    gallery_from_value(&value)
+}
+
+fn gallery_from_value(value: &Value) -> Option<GalleryPage> {
+    let arr = value.get("items")?.as_array()?;
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in arr {
+        if let Some(item) = media_from_gallery_item(entry) {
+            if seen.insert(media_key(&item.url)) {
+                items.push(item);
+            }
+        }
+    }
+    let next_cursor = value
+        .get("nextCursor")
+        .or_else(|| value.get("next_cursor"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
+    let has_more = value
+        .get("hasMore")
+        .or_else(|| value.get("has_more"))
+        .and_then(Value::as_bool)
+        .unwrap_or(next_cursor.is_some());
+    Some(GalleryPage {
+        items,
+        next_cursor,
+        has_more,
+    })
+}
+
+fn media_from_gallery_item(item: &Value) -> Option<Media> {
+    let media_type = item.get("media_type").and_then(Value::as_u64).unwrap_or(1);
+    if media_type == 2 {
+        let video = item
+            .get("video")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())?;
+        let candidates = video_candidates(&[video.to_string()]);
+        let url = candidates.first()?.clone();
+        return Some(Media::with_candidates(
+            "video",
+            candidates,
+            url.clone(),
+            "video.mp4".into(),
+            None,
+        ));
+    }
+    let large = item
+        .get("large")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| item.get("thumbnail").and_then(Value::as_str))?;
+    let mut urls = vec![large.to_string()];
+    if let Some(thumb) = item.get("thumbnail").and_then(Value::as_str) {
+        urls.push(thumb.to_string());
+    }
+    let candidates = photo_candidates(&urls);
+    let url = candidates.first()?.clone();
+    Some(Media::with_candidates(
+        "image",
+        candidates,
+        url.clone(),
+        "photo.jpg".into(),
+        None,
+    ))
+}
+
+pub fn assign_flat_names(athlete_id: &str, items: &mut [Media]) {
+    for (index, item) in items.iter_mut().enumerate() {
+        let ext = if item.kind == "video" {
+            extension(&item.url).unwrap_or("mp4")
+        } else {
+            extension(&item.url).unwrap_or("jpg")
+        };
+        item.filename = format!("strava-{athlete_id}-{:03}.{ext}", index + 1);
+    }
+}
+
 pub fn parse_json_or_none(text: &str) -> Option<Value> {
     let trimmed = text.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -877,6 +993,54 @@ mod tests {
             .candidates
             .iter()
             .any(|u| u.contains("2000x2000") || u.contains("2048")));
+    }
+
+    #[test]
+    fn parses_media_thumbnail_list_and_cursor() {
+        let html = r#"<div data-react-class="MediaThumbnailList" data-react-props="{&quot;items&quot;:[{&quot;media_type&quot;:1,&quot;large&quot;:&quot;https://dgtzuqphqg23d.cloudfront.net/pic-2048x1365.jpg&quot;,&quot;thumbnail&quot;:&quot;https://dgtzuqphqg23d.cloudfront.net/pic-128x85.jpg&quot;},{&quot;media_type&quot;:2,&quot;video&quot;:&quot;https://d35tn3x5zm6xrc.cloudfront.net/clipHash1/hls/clipHash1.m3u8&quot;}],&quot;nextCursor&quot;:&quot;1,2&quot;,&quot;hasMore&quot;:true}"></div>"#;
+        let page = parse_gallery_html(html).unwrap();
+        assert!(page.has_more);
+        assert_eq!(page.next_cursor.as_deref(), Some("1,2"));
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].kind, "image");
+        assert!(page.items[0].url.contains("2048x1365"));
+        assert_eq!(page.items[1].kind, "video");
+        assert!(page.items[1].url.ends_with(".mp4"));
+    }
+
+    #[test]
+    fn parses_snake_case_gallery_json() {
+        let json = r#"{"items":[{"media_type":1,"large":"https://dgtzuqphqg23d.cloudfront.net/a-1536x2048.jpg"}],"next_cursor":"9,8","has_more":false}"#;
+        let page = parse_gallery_json(json).unwrap();
+        assert!(!page.has_more);
+        assert_eq!(page.next_cursor.as_deref(), Some("9,8"));
+        assert_eq!(
+            page.items[0].url,
+            "https://dgtzuqphqg23d.cloudfront.net/a-1536x2048.jpg"
+        );
+    }
+
+    #[test]
+    fn assigns_flat_sequential_names() {
+        let mut items = vec![
+            Media::with_candidates(
+                "image",
+                vec!["https://dgtzuqphqg23d.cloudfront.net/a-2048x1365.jpg".into()],
+                "g".into(),
+                "x".into(),
+                None,
+            ),
+            Media::with_candidates(
+                "video",
+                vec!["https://d35tn3x5zm6xrc.cloudfront.net/h/h.mp4".into()],
+                "g".into(),
+                "y".into(),
+                None,
+            ),
+        ];
+        assign_flat_names("135539874", &mut items);
+        assert_eq!(items[0].filename, "strava-135539874-001.jpg");
+        assert_eq!(items[1].filename, "strava-135539874-002.mp4");
     }
 
     #[test]

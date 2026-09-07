@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.3
+
+- Discover media from the athlete Photos lightbox API (`/athletes/{id}/photos?cursor=`) instead of the incomplete activity list.
+- Write a flat archive named `strava-{id}-001.jpg` / `strava-{id}-002.mp4` with no activity subfolders.
+
 ## 0.3.2
 
 - Download lightbox-sized photos by requesting 2048px CloudFront variants instead of unsized thumbnail URLs.

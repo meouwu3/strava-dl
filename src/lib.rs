@@ -11,8 +11,8 @@ use clap::Parser;
 
 use archive::write_archive;
 use client::StravaClient;
-use discovery::{current_year_month, discover, DiscoverOpts};
-use extract::is_athlete_id;
+use discovery::{discover, DiscoverOpts};
+use extract::{assign_flat_names, is_athlete_id};
 use model::ArchivePlan;
 
 pub fn run() -> Result<()> {
@@ -22,23 +22,18 @@ pub fn run() -> Result<()> {
     }
     let authenticated = args.cookie.is_some() || args.token.is_some();
     let client = StravaClient::new(args.timeout, args.cookie, args.token, args.csrf)?;
-    let (year, month) = current_year_month();
     let opts = DiscoverOpts {
         base_url: args.base_url.trim_end_matches('/'),
         athlete_id: &args.athlete_id,
-        authenticated,
-        year,
-        month,
-        max_activities: None,
+        max_items: None,
     };
-    let items = discover(&client, &opts)?;
+    let mut items = discover(&client, &opts)?;
+    assign_flat_names(&args.athlete_id, &mut items);
     if items.is_empty() {
         bail!("no accessible media found; Strava privacy or login may be required");
     }
     if !authenticated {
-        eprintln!(
-            "warning: no --cookie or --token; activity photos and videos usually require login"
-        );
+        eprintln!("warning: no --cookie or --token; athlete photos usually require login");
     }
     let count = items.len();
     let plan = ArchivePlan {

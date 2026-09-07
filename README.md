@@ -23,17 +23,14 @@ strava-dl --cookie 'name=value; ...' 135539874
 
 Cookie values contain `;`. Always quote them in the shell.
 
-Activity media is grouped by activity id:
+Files are numbered in gallery order, photos and videos together:
 
 ```text
 strava-135539874/
+  strava-135539874-001.jpg
+  strava-135539874-002.mp4
   manifest.json
-  18437723885/
-    photo-01.jpg
-    video-01.mp4
 ```
-
-Gallery photos without an activity id are written under `photos/`.
 
 ## Development
 

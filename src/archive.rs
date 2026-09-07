@@ -181,13 +181,13 @@ mod tests {
             items: vec![Media::with_candidates(
                 "image",
                 vec!["https://dgtzuqphqg23d.cloudfront.net/a.jpg".into()],
-                "https://www.strava.com/activities/1".into(),
-                "1/photo-01.jpg".into(),
-                Some("1".into()),
+                "https://www.strava.com/athletes/1".into(),
+                "strava-1-001.jpg".into(),
+                None,
             )],
         };
         let root = write_archive(&fetcher, &plan).unwrap();
-        assert!(root.join("1/photo-01.jpg").exists());
+        assert!(root.join("strava-1-001.jpg").exists());
         assert!(root.join("manifest.json").exists());
 
         let mut zipped = plan.clone();
@@ -232,12 +232,12 @@ mod tests {
                     "https://dgtzuqphqg23d.cloudfront.net/a-128x85.jpg".into(),
                 ],
                 "https://www.strava.com/activities/1".into(),
-                "1/photo-01.jpg".into(),
-                Some("1".into()),
+                "strava-1-001.jpg".into(),
+                None,
             )],
         };
         let root = write_archive(&fetcher, &plan).unwrap();
-        let bytes = std::fs::read(root.join("1/photo-01.jpg")).unwrap();
+        let bytes = std::fs::read(root.join("strava-1-001.jpg")).unwrap();
         assert!(bytes.len() > 80_000);
         assert_eq!(bytes[4], 2);
     }

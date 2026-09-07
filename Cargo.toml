@@ -1,6 +1,6 @@
 [package]
 name = "strava-dl"
-version = "0.3.2"
+version = "0.3.3"
 default-run = "strava-dl"
 edition = "2021"
 rust-version = "1.74"
@@ -19,7 +19,6 @@ dirs = "6"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-time = { version = "0.3", features = ["std"] }
 url = "2"
 zip = "2"
 
