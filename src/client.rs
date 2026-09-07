@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, COOKIE, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, COOKIE, REFERER, USER_AGENT};
 use std::time::Duration;
 
 pub trait Fetcher {
@@ -39,8 +39,11 @@ impl StravaClient {
         let mut headers = HeaderMap::new();
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_static("Mozilla/5.0 (compatible; strava-dl/0.3)"),
+            HeaderValue::from_static(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            ),
         );
+        headers.insert(REFERER, HeaderValue::from_static("https://www.strava.com/"));
         if let Some(cookie) = &self.cookie {
             headers.insert(
                 COOKIE,

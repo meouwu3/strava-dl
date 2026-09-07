@@ -132,16 +132,104 @@ fn is_video_poster_url(url: &str) -> bool {
 }
 
 pub fn photo_quality_score(url: &str) -> u64 {
+    size_from_url(url)
+        .map(|(w, h)| w.saturating_mul(h))
+        .unwrap_or(0)
+}
+
+fn size_from_url(url: &str) -> Option<(u64, u64)> {
     let path = unescape_url(url);
     let path = path.split('?').next().unwrap_or(&path);
     let name = path.rsplit('/').next().unwrap_or(path);
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
-    if let Some(dash) = stem.rfind('-') {
-        if let Some((w, h)) = parse_wxh(&stem[dash + 1..]) {
-            return w.saturating_mul(h);
+    let dash = stem.rfind('-')?;
+    parse_wxh(&stem[dash + 1..])
+}
+
+pub fn highres_photo_urls(url: &str) -> Vec<String> {
+    let unescaped = unescape_url(url);
+    let Some((w, h)) = size_from_url(&unescaped) else {
+        return vec![unescaped];
+    };
+    let Some((prefix, ext)) = split_photo_prefix_ext(&unescaped) else {
+        return vec![unescaped];
+    };
+    let mut urls = Vec::new();
+    let mut seen = HashSet::new();
+    for (nw, nh) in long_side_variants(w, h, 2048) {
+        let candidate = format!("{prefix}-{nw}x{nh}{ext}");
+        if seen.insert(candidate.clone()) {
+            urls.push(candidate);
         }
     }
-    u64::MAX
+    for (nw, nh) in long_side_variants(w, h, 1024) {
+        let candidate = format!("{prefix}-{nw}x{nh}{ext}");
+        if seen.insert(candidate.clone()) {
+            urls.push(candidate);
+        }
+    }
+    if seen.insert(unescaped.clone()) {
+        urls.push(unescaped);
+    }
+    urls
+}
+
+fn split_photo_prefix_ext(url: &str) -> Option<(String, String)> {
+    let (base, query) = url
+        .split_once('?')
+        .map(|(b, q)| (b, Some(q)))
+        .unwrap_or((url, None));
+    let slash = base.rfind('/')?;
+    let (dir, name) = base.split_at(slash + 1);
+    let dot = name.rfind('.')?;
+    let stem = &name[..dot];
+    let ext = &name[dot..];
+    let hash = if let Some(dash) = stem.rfind('-') {
+        if parse_wxh(&stem[dash + 1..]).is_some() {
+            &stem[..dash]
+        } else {
+            stem
+        }
+    } else {
+        stem
+    };
+    let mut prefix = String::from(dir);
+    prefix.push_str(hash);
+    let ext = match query {
+        Some(q) if !q.is_empty() => format!("{ext}?{q}"),
+        _ => ext.to_string(),
+    };
+    Some((prefix, ext))
+}
+
+fn long_side_variants(w: u64, h: u64, long_side: u64) -> Vec<(u64, u64)> {
+    let w = w.max(1);
+    let h = h.max(1);
+    let landscape = w >= h;
+    let (major, minor) = if landscape { (w, h) } else { (h, w) };
+    let exact = minor as f64 * long_side as f64 / major as f64;
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for delta in 0i32..=16 {
+        for sign in [1i32, -1] {
+            if delta == 0 && sign < 0 {
+                continue;
+            }
+            let other = (exact + f64::from(delta * sign)).round() as i64;
+            if other <= 0 {
+                continue;
+            }
+            let pair = if landscape {
+                (long_side, other as u64)
+            } else {
+                (other as u64, long_side)
+            };
+            if seen.insert(pair) {
+                out.push(pair);
+            }
+        }
+    }
+    out
 }
 
 fn parse_wxh(value: &str) -> Option<(u64, u64)> {
@@ -158,11 +246,7 @@ fn parse_wxh(value: &str) -> Option<(u64, u64)> {
 pub fn photo_candidates(urls: &[String]) -> Vec<String> {
     let mut expanded = Vec::new();
     for url in urls {
-        expanded.push(unescape_url(url));
-        let original = original_photo_url(url);
-        if original != unescape_url(url) {
-            expanded.push(original);
-        }
+        expanded.extend(highres_photo_urls(url));
     }
     rank_urls(&expanded, |url| {
         if is_athlete_avatar_url(url)
@@ -176,8 +260,55 @@ pub fn photo_candidates(urls: &[String]) -> Vec<String> {
     })
 }
 
+pub fn video_mp4_url(url: &str) -> Option<String> {
+    let url = unescape_url(url);
+    let parsed = url::Url::parse(&url).ok()?;
+    let host = parsed.host_str()?;
+    let hash = video_hash(parsed.path())?;
+    Some(format!(
+        "{scheme}://{host}/{hash}/{hash}.mp4",
+        scheme = parsed.scheme()
+    ))
+}
+
+fn video_hash(path: &str) -> Option<&str> {
+    let path = path.trim_start_matches('/');
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    if parts.len() >= 2 && parts[1] == "hls" {
+        return Some(parts[0]);
+    }
+    if parts.len() >= 2 {
+        let stem = parts[1]
+            .rsplit_once('.')
+            .map(|(s, _)| s)
+            .unwrap_or(parts[1]);
+        if stem == parts[0] {
+            return Some(parts[0]);
+        }
+    }
+    let stem = parts[0]
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(parts[0]);
+    if stem.len() >= 8 {
+        Some(stem)
+    } else {
+        None
+    }
+}
+
 pub fn video_candidates(urls: &[String]) -> Vec<String> {
-    rank_urls(urls, |url| {
+    let mut expanded = Vec::new();
+    for url in urls {
+        if let Some(mp4) = video_mp4_url(url) {
+            expanded.push(mp4);
+        }
+        expanded.push(unescape_url(url));
+    }
+    rank_urls(&expanded, |url| {
         if media_kind(url) != Some("video") {
             return None;
         }
@@ -194,6 +325,14 @@ pub fn video_candidates(urls: &[String]) -> Vec<String> {
         };
         Some(rank)
     })
+}
+
+pub fn media_key(url: &str) -> String {
+    if media_kind(url) == Some("video") {
+        video_mp4_url(url).unwrap_or_else(|| unescape_url(url))
+    } else {
+        original_photo_url(url)
+    }
 }
 
 fn rank_urls(urls: &[String], score: impl Fn(&str) -> Option<u64>) -> Vec<String> {
@@ -305,18 +444,18 @@ pub fn media_kind(url: &str) -> Option<&'static str> {
     None
 }
 
-pub fn filename_from_url(url: &str, fallback: &str) -> String {
-    let clean = original_photo_url(url);
-    let path = clean.split('?').next().unwrap_or(&clean);
-    path.rsplit('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .unwrap_or(fallback)
-        .to_string()
+pub fn media_from_html(html: &str, source: &str, activity_id: Option<&str>) -> Vec<Media> {
+    let activity_id = activity_id.unwrap_or("photos");
+    media_from_page(html, source, activity_id)
 }
 
 pub fn media_from_activity_html(html: &str, activity_id: &str) -> Vec<Media> {
     let source = format!("https://www.strava.com/activities/{activity_id}");
+    media_from_page(html, &source, activity_id)
+}
+
+fn media_from_page(html: &str, source: &str, activity_id: &str) -> Vec<Media> {
+    let source = source.to_string();
     let mut items = Vec::new();
     let mut seen = HashSet::new();
     let mut photo_i = 0u32;
@@ -373,12 +512,12 @@ fn named_media(
         photo_candidates(&urls)
     };
     let url = candidates.first()?.clone();
-    if !seen.insert(url.clone()) {
+    if !seen.insert(media_key(&url)) {
         return None;
     }
     Some(if kind == "video" {
         *video_i += 1;
-        let ext = extension(&url).unwrap_or("ts");
+        let ext = extension(&url).unwrap_or("mp4");
         let filename = format!("{activity_id}/video-{:02}.{ext}", *video_i);
         Media::with_candidates(
             "video",
@@ -650,14 +789,23 @@ mod tests {
             "https://dgtzuqphqg23d.cloudfront.net/hash-64x64.jpg".into(),
             "https://dgtzuqphqg23d.cloudfront.net/hash-2048x1152.jpg".into(),
         ]);
-        assert_eq!(
-            candidates[0],
-            "https://dgtzuqphqg23d.cloudfront.net/hash.jpg"
+        assert!(candidates[0].contains("2048"));
+        assert!(candidates
+            .iter()
+            .any(|u| u.ends_with("/hash-2048x1152.jpg")));
+        assert!(!candidates[0].ends_with("/hash.jpg"));
+    }
+
+    #[test]
+    fn upgrades_thumbnail_to_2048_long_side() {
+        let urls = highres_photo_urls(
+            "https://dgtzuqphqg23d.cloudfront.net/130IMT0SrbqOQtKxf7UzNnnwDxkB7mLTz9gmfUHlP10-128x85.jpg",
         );
-        assert_eq!(
-            candidates[1],
-            "https://dgtzuqphqg23d.cloudfront.net/hash-2048x1152.jpg"
+        assert!(urls.iter().any(|u| u.ends_with("-2048x1365.jpg")));
+        let portrait = highres_photo_urls(
+            "https://dgtzuqphqg23d.cloudfront.net/ceULkD9O5EeCdXeWW1u7YaTEwpuLsxhH6QLNdnTEHLA-96x128.jpg",
         );
+        assert!(portrait.iter().any(|u| u.ends_with("-1536x2048.jpg")));
     }
 
     #[test]
@@ -678,16 +826,15 @@ mod tests {
 
     #[test]
     fn extracts_activity_ids_and_media_blob() {
-        let html = r#"<div data-react-props="[{&quot;media_type&quot;:1,&quot;large&quot;:&quot;https://dgtzuqphqg23d.cloudfront.net/pic-2048x1152.jpg&quot;,&quot;video&quot;:null},{&quot;media_type&quot;:2,&quot;video&quot;:&quot;https://d35tn3x5zm6xrc.cloudfront.net/clip.m3u8&quot;}]"></div><a href="/activities/18437723885">"#;
+        let html = r#"<div data-react-props="[{&quot;media_type&quot;:1,&quot;large&quot;:&quot;https://dgtzuqphqg23d.cloudfront.net/pic-2048x1152.jpg&quot;,&quot;video&quot;:null},{&quot;media_type&quot;:2,&quot;video&quot;:&quot;https://d35tn3x5zm6xrc.cloudfront.net/clipHash1/hls/clipHash1.m3u8&quot;}]"></div><a href="/activities/18437723885">"#;
         assert_eq!(activity_ids(html), vec!["18437723885".to_string()]);
         let media = media_from_activity_html(html, "18437723885");
         assert_eq!(media.len(), 2);
         assert_eq!(media[0].kind, "image");
-        assert_eq!(media[0].url, "https://dgtzuqphqg23d.cloudfront.net/pic.jpg");
+        assert!(media[0].url.contains("2048"));
         assert_eq!(media[0].filename, "18437723885/photo-01.jpg");
         assert_eq!(media[1].kind, "video");
-        assert_eq!(media[1].filename, "18437723885/video-01.m3u8");
-        assert!(media[0].candidates[0].ends_with("/pic.jpg"));
+        assert!(media[1].filename.ends_with(".mp4"));
         assert!(media[0]
             .candidates
             .iter()
@@ -706,18 +853,13 @@ mod tests {
 
     #[test]
     fn prefers_mp4_over_hls_playlist() {
-        let candidates = video_candidates(&[
-            "https://d35tn3x5zm6xrc.cloudfront.net/clip.m3u8".into(),
-            "https://d35tn3x5zm6xrc.cloudfront.net/clip.mp4".into(),
-        ]);
+        let hls = "https://d35tn3x5zm6xrc.cloudfront.net/clipHash/hls/clipHash.m3u8";
+        let candidates = video_candidates(&[hls.into()]);
         assert_eq!(
             candidates[0],
-            "https://d35tn3x5zm6xrc.cloudfront.net/clip.mp4"
+            "https://d35tn3x5zm6xrc.cloudfront.net/clipHash/clipHash.mp4"
         );
-        assert_eq!(
-            candidates[1],
-            "https://d35tn3x5zm6xrc.cloudfront.net/clip.m3u8"
-        );
+        assert!(candidates.iter().any(|u| u.ends_with(".m3u8")));
     }
 
     #[test]
@@ -730,11 +872,11 @@ mod tests {
         }]);
         let photos = photos_from_api(&json, "99");
         assert_eq!(photos.len(), 1);
-        assert_eq!(photos[0].url, "https://dgtzuqphqg23d.cloudfront.net/a.jpg");
-        assert_eq!(
-            photos[0].candidates[1],
-            "https://dgtzuqphqg23d.cloudfront.net/a-2000x2000.jpg"
-        );
+        assert!(photos[0].url.contains("2048") || photos[0].url.contains("2000"));
+        assert!(photos[0]
+            .candidates
+            .iter()
+            .any(|u| u.contains("2000x2000") || u.contains("2048")));
     }
 
     #[test]

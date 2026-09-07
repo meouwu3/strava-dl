@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 
 use crate::client::Fetcher;
 use crate::extract::{
-    activity_ids, activity_ids_from_json, is_login_page, media_from_activity_html, media_kind,
-    parse_json_or_none, photo_candidates, photos_from_api, video_candidates,
+    activity_ids, activity_ids_from_json, is_login_page, media_from_activity_html, media_from_html,
+    media_key, parse_json_or_none, photos_from_api,
 };
 use crate::model::Media;
 
@@ -33,6 +33,9 @@ pub fn discover(fetcher: &dyn Fetcher, opts: &DiscoverOpts<'_>) -> Result<Vec<Me
 
     let mut items = Vec::new();
     let mut seen = HashSet::new();
+    for item in media_from_html(&profile, &profile_url, None) {
+        push_item(&mut items, &mut seen, item);
+    }
 
     let mut ids = Vec::new();
     let mut id_seen = HashSet::new();
@@ -93,28 +96,16 @@ fn collect_from_photos_pages(
         if is_login_page(&body) {
             break;
         }
-        let before = ids.len();
+        let before_ids = ids.len();
+        let before_media = items.len();
         extend_ids(ids, id_seen, activity_ids(&body));
         if let Some(json) = parse_json_or_none(&body) {
             extend_ids(ids, id_seen, activity_ids_from_json(&json, opts.athlete_id));
         }
-        for url in crate::extract::extract_urls(&body) {
-            let Some(kind) = media_kind(&url) else {
-                continue;
-            };
-            let candidates = if kind == "video" {
-                video_candidates(std::slice::from_ref(&url))
-            } else {
-                photo_candidates(std::slice::from_ref(&url))
-            };
-            let Some(preferred) = candidates.first() else {
-                continue;
-            };
-            let filename = crate::extract::filename_from_url(preferred, "media.bin");
-            let item = Media::with_candidates(kind, candidates, url.clone(), filename, None);
+        for item in media_from_html(&body, &url, None) {
             push_item(items, seen, item);
         }
-        if ids.len() == before && page > 1 {
+        if page > 1 && ids.len() == before_ids && items.len() == before_media {
             break;
         }
     }
@@ -247,7 +238,7 @@ fn extend_ids(ids: &mut Vec<String>, seen: &mut HashSet<String>, more: Vec<Strin
 }
 
 fn push_item(items: &mut Vec<Media>, seen: &mut HashSet<String>, item: Media) {
-    if seen.insert(item.url.clone()) {
+    if seen.insert(media_key(&item.url)) {
         items.push(item);
     }
 }

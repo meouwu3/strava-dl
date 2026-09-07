@@ -7,7 +7,6 @@ use std::{
 use zip::{write::SimpleFileOptions, ZipWriter};
 
 use crate::client::{looks_like_media, Fetcher};
-use crate::extract::original_photo_url;
 use crate::hls;
 use crate::model::{ArchivePlan, Media, Output};
 
@@ -50,14 +49,8 @@ pub fn write_archive(fetcher: &dyn Fetcher, plan: &ArchivePlan) -> Result<PathBu
 
 fn download_item(fetcher: &dyn Fetcher, item: &Media) -> Result<Vec<u8>> {
     let mut last_error = None;
-    let mut urls = item.download_urls();
-    if item.kind == "image" {
-        let original = original_photo_url(&item.url);
-        if !urls.iter().any(|u| u == &original) {
-            urls.insert(0, original);
-        }
-    }
-    for url in urls {
+    let mut best: Option<Vec<u8>> = None;
+    for url in item.download_urls() {
         let result = if item.kind == "video" && url.contains("m3u8") {
             hls::download(fetcher, &url)
         } else {
@@ -67,13 +60,25 @@ fn download_item(fetcher: &dyn Fetcher, item: &Media) -> Result<Vec<u8>> {
             Ok(bytes)
                 if looks_like_media(&bytes) || (item.kind == "video" && !bytes.is_empty()) =>
             {
-                return Ok(bytes);
+                let better = best.as_ref().map(|b| bytes.len() > b.len()).unwrap_or(true);
+                if better {
+                    best = Some(bytes);
+                }
+                let n = best.as_ref().map(Vec::len).unwrap_or(0);
+                if item.kind == "video" && n > 100_000 {
+                    break;
+                }
+                if item.kind == "image" && n >= 80_000 {
+                    break;
+                }
             }
             Ok(_) => last_error = Some(anyhow::anyhow!("response for {url} was not media")),
             Err(err) => last_error = Some(err),
         }
     }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no download URL for {}", item.url)))
+    best.ok_or_else(|| {
+        last_error.unwrap_or_else(|| anyhow::anyhow!("no download URL for {}", item.url))
+    })
 }
 
 fn unique_path(root: &Path, filename: &str) -> PathBuf {
@@ -194,25 +199,25 @@ mod tests {
     }
 
     #[test]
-    fn prefers_original_photo_then_falls_back() {
+    fn prefers_largest_successful_photo() {
         let dir = tempfile::tempdir().unwrap();
-        let jpeg = [0xFFu8, 0xD8, 0xFF, 0xE0]
+        let thumb = [0xFFu8, 0xD8, 0xFF, 0xE0]
             .into_iter()
             .chain([1u8; 32])
             .collect::<Vec<_>>();
-        let sized = [0xFFu8, 0xD8, 0xFF, 0xE0]
+        let large = [0xFFu8, 0xD8, 0xFF, 0xE0]
             .into_iter()
-            .chain([2u8; 32])
+            .chain([2u8; 90_000])
             .collect::<Vec<_>>();
         let fetcher = MapFetcher {
             bytes: HashMap::from([
                 (
-                    "https://dgtzuqphqg23d.cloudfront.net/a.jpg".into(),
-                    jpeg.clone(),
+                    "https://dgtzuqphqg23d.cloudfront.net/a-128x85.jpg".into(),
+                    thumb,
                 ),
                 (
-                    "https://dgtzuqphqg23d.cloudfront.net/a-64x64.jpg".into(),
-                    sized,
+                    "https://dgtzuqphqg23d.cloudfront.net/a-2048x1365.jpg".into(),
+                    large,
                 ),
             ]),
         };
@@ -223,8 +228,8 @@ mod tests {
             items: vec![Media::with_candidates(
                 "image",
                 vec![
-                    "https://dgtzuqphqg23d.cloudfront.net/a.jpg".into(),
-                    "https://dgtzuqphqg23d.cloudfront.net/a-64x64.jpg".into(),
+                    "https://dgtzuqphqg23d.cloudfront.net/a-2048x1365.jpg".into(),
+                    "https://dgtzuqphqg23d.cloudfront.net/a-128x85.jpg".into(),
                 ],
                 "https://www.strava.com/activities/1".into(),
                 "1/photo-01.jpg".into(),
@@ -233,6 +238,7 @@ mod tests {
         };
         let root = write_archive(&fetcher, &plan).unwrap();
         let bytes = std::fs::read(root.join("1/photo-01.jpg")).unwrap();
-        assert_eq!(bytes[4], 1);
+        assert!(bytes.len() > 80_000);
+        assert_eq!(bytes[4], 2);
     }
 }

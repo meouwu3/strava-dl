@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.2
+
+- Download lightbox-sized photos by requesting 2048px CloudFront variants instead of unsized thumbnail URLs.
+- Save videos as MP4 from the CDN (`/{hash}/{hash}.mp4`) instead of concatenated `.m3u8`.
+- Collect media from the athlete profile photo strip as well as activity pages.
+
 ## 0.3.1
 
 - Skip athlete profile avatars.

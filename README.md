@@ -13,7 +13,7 @@ sdl 135539874
 
 Files are written to `~/Downloads/strava-<athlete-id>/` by default. Use `--output-dir` to change the destination. `--output zip` creates a ZIP archive instead. Each archive includes `manifest.json`.
 
-Activity photos and videos require a logged-in session. Profile avatars are not downloaded. Photos use the original file when the CDN exposes it, otherwise the largest sized variant. Videos prefer MP4, otherwise the highest-resolution HLS stream.
+Activity photos and videos require a logged-in session. Profile avatars are not downloaded. Photos are requested at the 2048px CloudFront size used by the athlete photo lightbox, not the 128px strip thumbnails. Videos are saved as MP4.
 
 ```bash
 strava-dl --cookie 'name=value; ...' 135539874
@@ -30,10 +30,10 @@ strava-135539874/
   manifest.json
   18437723885/
     photo-01.jpg
-    video-01.ts
+    video-01.mp4
 ```
 
-HLS videos are saved as concatenated `.ts` files. Remux with `ffmpeg -i video-01.ts -c copy video-01.mp4` if you need MP4.
+Gallery photos without an activity id are written under `photos/`.
 
 ## Development
 
