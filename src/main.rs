@@ -1,3 +1,3 @@
-fn main() -> anyhow::Result<()> {
-    strava_dl::run()
+fn main() {
+    strava_dl::run();
 }

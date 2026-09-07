@@ -5,6 +5,7 @@ mod discovery;
 mod extract;
 mod hls;
 mod model;
+mod progress;
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -15,7 +16,14 @@ use discovery::{discover, DiscoverOpts};
 use extract::{assign_flat_names, is_athlete_id};
 use model::ArchivePlan;
 
-pub fn run() -> Result<()> {
+pub fn run() {
+    if run_inner().is_err() {
+        progress::fail();
+        std::process::exit(1);
+    }
+}
+
+fn run_inner() -> Result<()> {
     let args = cli::Args::parse();
     if !is_athlete_id(&args.athlete_id) {
         bail!("athlete id must contain only digits");
@@ -35,15 +43,13 @@ pub fn run() -> Result<()> {
     if !authenticated {
         eprintln!("warning: no --cookie or --token; athlete photos usually require login");
     }
-    let count = items.len();
     let plan = ArchivePlan {
         athlete_id: args.athlete_id,
         output: args.output.into(),
         output_dir: args.output_dir,
         items,
     };
-    let dest = write_archive(&client, &plan)?;
-    println!("{}", dest.display());
-    eprintln!("archived {count} media files");
+    write_archive(&client, &plan)?;
+    progress::complete();
     Ok(())
 }

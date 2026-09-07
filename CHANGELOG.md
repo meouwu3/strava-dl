@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.5
+
+- Show a scan progress bar with the current page, and a download progress bar with current/total.
+- Print `下载完成` on success and `下载失败` on error.
+
 ## 0.3.4
 
 - Number files oldest first. Strava lists newest media first; `strava-{id}-001` is the earliest item.

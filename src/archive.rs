@@ -9,6 +9,7 @@ use zip::{write::SimpleFileOptions, ZipWriter};
 use crate::client::{looks_like_media, Fetcher};
 use crate::hls;
 use crate::model::{ArchivePlan, Media, Output};
+use crate::progress::DownloadBar;
 
 pub fn write_archive(fetcher: &dyn Fetcher, plan: &ArchivePlan) -> Result<PathBuf> {
     let root = plan.output_dir.join(format!("strava-{}", plan.athlete_id));
@@ -17,8 +18,9 @@ pub fn write_archive(fetcher: &dyn Fetcher, plan: &ArchivePlan) -> Result<PathBu
     }
     fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
 
+    let mut bar = DownloadBar::new(plan.items.len());
     for (index, item) in plan.items.iter().enumerate() {
-        eprint!("\rdownloading {}/{}", index + 1, plan.items.len());
+        bar.set(index + 1);
         let bytes = download_item(fetcher, item)?;
         let dest = unique_path(&root, &item.filename);
         if let Some(parent) = dest.parent() {
@@ -26,9 +28,7 @@ pub fn write_archive(fetcher: &dyn Fetcher, plan: &ArchivePlan) -> Result<PathBu
         }
         fs::write(&dest, bytes).with_context(|| format!("write {}", dest.display()))?;
     }
-    if !plan.items.is_empty() {
-        eprintln!();
-    }
+    bar.finish();
     fs::write(
         root.join("manifest.json"),
         serde_json::to_vec_pretty(&plan.items)?,

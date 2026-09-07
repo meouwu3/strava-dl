@@ -6,6 +6,7 @@ use crate::extract::{
     is_login_page, media_key, parse_gallery_html, parse_gallery_json, GalleryPage,
 };
 use crate::model::Media;
+use crate::progress::ScanBar;
 
 pub struct DiscoverOpts<'a> {
     pub base_url: &'a str,
@@ -14,11 +15,11 @@ pub struct DiscoverOpts<'a> {
 }
 
 pub fn discover(fetcher: &dyn Fetcher, opts: &DiscoverOpts<'_>) -> Result<Vec<Media>> {
+    let mut bar = ScanBar::new();
+    bar.set(1);
     let profile_url = format!("{}/athletes/{}", opts.base_url, opts.athlete_id);
     let profile = fetcher.get_text(&profile_url, false)?;
-    if is_login_page(&profile) {
-        eprintln!("warning: Strava returned a login page; cookie or token may be expired");
-    }
+    let login_page = is_login_page(&profile);
 
     let mut items = Vec::new();
     let mut seen = HashSet::new();
@@ -54,7 +55,7 @@ pub fn discover(fetcher: &dyn Fetcher, opts: &DiscoverOpts<'_>) -> Result<Vec<Me
         if pages > 200 {
             break;
         }
-        eprint!("\rscanning photos {pages}");
+        bar.set(pages);
         let url = format!(
             "{}/athletes/{}/photos?cursor={}&per_page=20",
             opts.base_url,
@@ -75,8 +76,9 @@ pub fn discover(fetcher: &dyn Fetcher, opts: &DiscoverOpts<'_>) -> Result<Vec<Me
             Err(_) => break,
         }
     }
-    if pages > 1 {
-        eprintln!();
+    bar.finish();
+    if login_page {
+        eprintln!("warning: Strava returned a login page; cookie or token may be expired");
     }
     if let Some(max) = opts.max_items {
         items.truncate(max);

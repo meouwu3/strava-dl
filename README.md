@@ -23,6 +23,8 @@ strava-dl --cookie 'name=value; ...' 135539874
 
 Cookie values contain `;`. Always quote them in the shell.
 
+Progress is two bars on stderr: scan shows the current page, download shows current/total. Success prints `下载完成`. Errors print `下载失败`.
+
 Strava shows newest media first. Files are numbered oldest first, photos and videos together, so `001` is the earliest:
 
 ```text
