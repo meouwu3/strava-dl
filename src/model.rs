@@ -15,6 +15,8 @@ pub struct Media {
     pub filename: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
+    #[serde(skip)]
+    pub candidates: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -26,33 +28,32 @@ pub struct ArchivePlan {
 }
 
 impl Media {
-    pub fn image(
-        url: String,
+    pub fn with_candidates(
+        kind: &str,
+        urls: Vec<String>,
         source: String,
         filename: String,
         activity_id: Option<String>,
     ) -> Self {
+        let url = urls
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "media.bin".to_string());
         Self {
             url,
-            kind: "image".into(),
+            kind: kind.into(),
             source,
             filename,
             activity_id,
+            candidates: urls,
         }
     }
 
-    pub fn video(
-        url: String,
-        source: String,
-        filename: String,
-        activity_id: Option<String>,
-    ) -> Self {
-        Self {
-            url,
-            kind: "video".into(),
-            source,
-            filename,
-            activity_id,
+    pub fn download_urls(&self) -> Vec<String> {
+        if self.candidates.is_empty() {
+            vec![self.url.clone()]
+        } else {
+            self.candidates.clone()
         }
     }
 }

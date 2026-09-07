@@ -1,8 +1,10 @@
 use crate::model::Media;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 const STATIC_HOSTS: &[&str] = &["d3nn82uaxijpm6.cloudfront.net", "web-assets.strava.com"];
+const AVATAR_HOSTS: &[&str] = &["dgalywyr863hv.cloudfront.net"];
+const VIDEO_HOSTS: &[&str] = &["d35tn3x5zm6xrc.cloudfront.net"];
 
 pub fn is_athlete_id(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|c| c.is_ascii_digit())
@@ -27,12 +29,7 @@ pub fn original_photo_url(url: &str) -> String {
         .unwrap_or((unescaped.as_str(), None));
     let rewritten = if let Some(idx) = base.rfind('/') {
         let (prefix, name) = base.split_at(idx + 1);
-        if name == "medium.jpg" {
-            format!("{prefix}large.jpg")
-        } else {
-            let stripped = regex_lite_strip_size(name);
-            format!("{prefix}{stripped}")
-        }
+        format!("{prefix}{}", regex_lite_strip_size(name))
     } else {
         regex_lite_strip_size(base)
     };
@@ -106,26 +103,113 @@ pub fn activity_ids(text: &str) -> Vec<String> {
     ids
 }
 
-pub fn profile_image_url(html: &str) -> Option<String> {
-    if let Some(url) = next_data_profile_image(html) {
-        return Some(original_photo_url(&url));
+pub fn is_athlete_avatar_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(&unescape_url(url)) else {
+        return url.contains("/pictures/athletes/");
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    if AVATAR_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h)) {
+        return true;
     }
-    extract_urls(html)
-        .into_iter()
-        .find(|url| url.contains("/pictures/athletes/"))
-        .map(|url| original_photo_url(&url))
+    parsed
+        .path()
+        .to_ascii_lowercase()
+        .contains("/pictures/athletes/")
 }
 
-fn next_data_profile_image(html: &str) -> Option<String> {
-    let start = html.find("id=\"__NEXT_DATA__\"")?;
-    let after = &html[start..];
-    let gt = after.find('>')?;
-    let rest = &after[gt + 1..];
-    let end = rest.find("</script>")?;
-    let json: Value = serde_json::from_str(&rest[..end]).ok()?;
-    json.pointer("/props/pageProps/athlete/profileImageUrl")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+fn is_video_poster_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(&unescape_url(url)) else {
+        return false;
+    };
+    let host = parsed.host_str().unwrap_or_default();
+    if !VIDEO_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h)) {
+        return false;
+    }
+    let path = parsed.path().to_ascii_lowercase();
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
+}
+
+pub fn photo_quality_score(url: &str) -> u64 {
+    let path = unescape_url(url);
+    let path = path.split('?').next().unwrap_or(&path);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+    if let Some(dash) = stem.rfind('-') {
+        if let Some((w, h)) = parse_wxh(&stem[dash + 1..]) {
+            return w.saturating_mul(h);
+        }
+    }
+    u64::MAX
+}
+
+fn parse_wxh(value: &str) -> Option<(u64, u64)> {
+    let (w, h) = value.split_once('x')?;
+    if w.is_empty() || h.is_empty() {
+        return None;
+    }
+    if !w.chars().all(|c| c.is_ascii_digit()) || !h.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((w.parse().ok()?, h.parse().ok()?))
+}
+
+pub fn photo_candidates(urls: &[String]) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for url in urls {
+        expanded.push(unescape_url(url));
+        let original = original_photo_url(url);
+        if original != unescape_url(url) {
+            expanded.push(original);
+        }
+    }
+    rank_urls(&expanded, |url| {
+        if is_athlete_avatar_url(url)
+            || is_video_poster_url(url)
+            || media_kind(url) != Some("image")
+        {
+            None
+        } else {
+            Some(photo_quality_score(url))
+        }
+    })
+}
+
+pub fn video_candidates(urls: &[String]) -> Vec<String> {
+    rank_urls(urls, |url| {
+        if media_kind(url) != Some("video") {
+            return None;
+        }
+        let path = unescape_url(url).to_ascii_lowercase();
+        let rank = if [".mp4", ".mov", ".webm"]
+            .iter()
+            .any(|ext| path.contains(ext))
+        {
+            3
+        } else if path.contains(".m3u8") {
+            2
+        } else {
+            1
+        };
+        Some(rank)
+    })
+}
+
+fn rank_urls(urls: &[String], score: impl Fn(&str) -> Option<u64>) -> Vec<String> {
+    let mut ranked = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in urls {
+        let url = unescape_url(raw);
+        let Some(s) = score(&url) else {
+            continue;
+        };
+        if seen.insert(url.clone()) {
+            ranked.push((s, url));
+        }
+    }
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    ranked.into_iter().map(|(_, url)| url).collect()
 }
 
 pub fn extract_urls(text: &str) -> Vec<String> {
@@ -182,6 +266,9 @@ pub fn is_strava_media_url(url: &str) -> bool {
     if STATIC_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h)) {
         return false;
     }
+    if is_athlete_avatar_url(url) || is_video_poster_url(url) {
+        return false;
+    }
     let path = parsed.path().to_ascii_lowercase();
     let host_l = host.to_ascii_lowercase();
     if host_l.contains("cloudfront.net") || host_l.ends_with(".strava.com") {
@@ -236,66 +323,82 @@ pub fn media_from_activity_html(html: &str, activity_id: &str) -> Vec<Media> {
     let mut video_i = 0u32;
 
     for raw in parse_media_type_entries(html) {
-        let (kind, url) = match media_from_entry(&raw) {
-            Some(v) => v,
-            None => continue,
-        };
-        if !seen.insert(url.clone()) {
+        let Some((kind, urls)) = media_from_entry(&raw) else {
             continue;
-        }
-        items.push(named_media(
+        };
+        if let Some(item) = named_media(
             kind,
-            url,
+            urls,
             source.clone(),
             activity_id,
             &mut photo_i,
             &mut video_i,
-        ));
+            &mut seen,
+        ) {
+            items.push(item);
+        }
     }
 
     for url in extract_urls(html) {
         let Some(kind) = media_kind(&url) else {
             continue;
         };
-        let url = if kind == "image" {
-            original_photo_url(&url)
-        } else {
-            unescape_url(&url)
-        };
-        if !seen.insert(url.clone()) {
-            continue;
-        }
-        items.push(named_media(
+        if let Some(item) = named_media(
             kind,
-            url,
+            vec![url],
             source.clone(),
             activity_id,
             &mut photo_i,
             &mut video_i,
-        ));
+            &mut seen,
+        ) {
+            items.push(item);
+        }
     }
     items
 }
 
 fn named_media(
     kind: &str,
-    url: String,
+    urls: Vec<String>,
     source: String,
     activity_id: &str,
     photo_i: &mut u32,
     video_i: &mut u32,
-) -> Media {
-    if kind == "video" {
+    seen: &mut HashSet<String>,
+) -> Option<Media> {
+    let candidates = if kind == "video" {
+        video_candidates(&urls)
+    } else {
+        photo_candidates(&urls)
+    };
+    let url = candidates.first()?.clone();
+    if !seen.insert(url.clone()) {
+        return None;
+    }
+    Some(if kind == "video" {
         *video_i += 1;
         let ext = extension(&url).unwrap_or("ts");
         let filename = format!("{activity_id}/video-{:02}.{ext}", *video_i);
-        Media::video(url, source, filename, Some(activity_id.into()))
+        Media::with_candidates(
+            "video",
+            candidates,
+            source,
+            filename,
+            Some(activity_id.into()),
+        )
     } else {
         *photo_i += 1;
         let ext = extension(&url).unwrap_or("jpg");
         let filename = format!("{activity_id}/photo-{:02}.{ext}", *photo_i);
-        Media::image(url, source, filename, Some(activity_id.into()))
-    }
+        Media::with_candidates(
+            "image",
+            candidates,
+            source,
+            filename,
+            Some(activity_id.into()),
+        )
+    })
 }
 
 fn extension(url: &str) -> Option<&str> {
@@ -309,21 +412,51 @@ fn extension(url: &str) -> Option<&str> {
     }
 }
 
-fn media_from_entry(value: &Value) -> Option<(&str, String)> {
+fn media_from_entry(value: &Value) -> Option<(&'static str, Vec<String>)> {
     let media_type = value.get("media_type").and_then(Value::as_u64).unwrap_or(1);
     if media_type == 2 {
-        let url = value
-            .get("video")
-            .and_then(Value::as_str)
-            .filter(|u| !u.is_empty())?;
-        return Some(("video", unescape_url(url)));
+        let urls = string_fields(value, &["video_url", "video", "mp4", "url"]);
+        if urls.is_empty() {
+            return None;
+        }
+        return Some(("video", urls));
     }
-    let url = value
-        .get("large")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("thumbnail").and_then(Value::as_str))
-        .filter(|u| !u.is_empty())?;
-    Some(("image", original_photo_url(url)))
+    let mut urls = string_fields(value, &["original", "large", "url", "thumbnail"]);
+    if let Some(sized) = value.get("urls") {
+        collect_sized_urls(sized, &mut urls);
+    }
+    if urls.is_empty() {
+        return None;
+    }
+    Some(("image", urls))
+}
+
+fn string_fields(value: &Value, keys: &[&str]) -> Vec<String> {
+    let mut urls = Vec::new();
+    for key in keys {
+        if let Some(url) = value
+            .get(*key)
+            .and_then(Value::as_str)
+            .filter(|u| !u.is_empty())
+        {
+            urls.push(url.to_string());
+        }
+    }
+    urls
+}
+
+fn collect_sized_urls(value: &Value, urls: &mut Vec<String>) {
+    match value {
+        Value::String(s) if !s.is_empty() => urls.push(s.clone()),
+        Value::Object(map) => {
+            for item in map.values() {
+                if let Some(s) = item.as_str().filter(|s| !s.is_empty()) {
+                    urls.push(s.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_media_type_entries(html: &str) -> Vec<Value> {
@@ -456,48 +589,35 @@ pub fn photos_from_api(value: &Value, activity_id: &str) -> Vec<Media> {
     };
     for entry in entries {
         if let Some(url) = entry.get("video_url").and_then(Value::as_str) {
-            if !url.is_empty() && seen.insert(url.to_string()) {
-                items.push(named_media(
+            if !url.is_empty() {
+                if let Some(item) = named_media(
                     "video",
-                    unescape_url(url),
+                    vec![url.to_string()],
                     source.clone(),
                     activity_id,
                     &mut photo_i,
                     &mut video_i,
-                ));
+                    &mut seen,
+                ) {
+                    items.push(item);
+                }
             }
         }
-        if let Some(url) = best_sized_url(entry.get("urls")) {
-            if seen.insert(url.clone()) {
-                items.push(named_media(
-                    "image",
-                    original_photo_url(&url),
-                    source.clone(),
-                    activity_id,
-                    &mut photo_i,
-                    &mut video_i,
-                ));
-            }
+        let mut urls = Vec::new();
+        collect_sized_urls(entry.get("urls").unwrap_or(&Value::Null), &mut urls);
+        if let Some(item) = named_media(
+            "image",
+            urls,
+            source.clone(),
+            activity_id,
+            &mut photo_i,
+            &mut video_i,
+            &mut seen,
+        ) {
+            items.push(item);
         }
     }
     items
-}
-
-fn best_sized_url(urls: Option<&Value>) -> Option<String> {
-    match urls? {
-        Value::String(s) => Some(s.clone()),
-        Value::Object(map) => {
-            let mut ranked: BTreeMap<i64, String> = BTreeMap::new();
-            for (key, value) in map {
-                if let Some(url) = value.as_str() {
-                    let score = key.parse::<i64>().unwrap_or(0);
-                    ranked.insert(score, url.to_string());
-                }
-            }
-            ranked.last_key_value().map(|(_, url)| url.clone())
-        }
-        _ => None,
-    }
 }
 
 pub fn parse_json_or_none(text: &str) -> Option<Value> {
@@ -521,28 +641,37 @@ mod tests {
     }
 
     #[test]
-    fn strips_size_suffix_and_upgrades_profile_medium() {
+    fn strips_size_suffix_for_original_photo() {
         assert_eq!(
             original_photo_url("https://dgtzuqphqg23d.cloudfront.net/hash-2048x1152.jpg"),
             "https://dgtzuqphqg23d.cloudfront.net/hash.jpg"
         );
+        let candidates = photo_candidates(&[
+            "https://dgtzuqphqg23d.cloudfront.net/hash-64x64.jpg".into(),
+            "https://dgtzuqphqg23d.cloudfront.net/hash-2048x1152.jpg".into(),
+        ]);
         assert_eq!(
-            original_photo_url(
-                "https://dgalywyr863hv.cloudfront.net/pictures/athletes/1/2/12/medium.jpg"
-            ),
-            "https://dgalywyr863hv.cloudfront.net/pictures/athletes/1/2/12/large.jpg"
+            candidates[0],
+            "https://dgtzuqphqg23d.cloudfront.net/hash.jpg"
+        );
+        assert_eq!(
+            candidates[1],
+            "https://dgtzuqphqg23d.cloudfront.net/hash-2048x1152.jpg"
         );
     }
 
     #[test]
-    fn ignores_static_assets() {
+    fn ignores_static_assets_and_avatars() {
         assert!(!is_strava_media_url(
             "https://d3nn82uaxijpm6.cloudfront.net/favicon-32x32.png"
         ));
         assert!(is_strava_media_url(
             "https://dgtzuqphqg23d.cloudfront.net/hash-2048x1152.jpg"
         ));
-        assert!(is_strava_media_url(
+        assert!(!is_strava_media_url(
+            "https://dgalywyr863hv.cloudfront.net/pictures/athletes/1/2/12/medium.jpg"
+        ));
+        assert!(is_athlete_avatar_url(
             "https://dgalywyr863hv.cloudfront.net/pictures/athletes/1/2/12/medium.jpg"
         ));
     }
@@ -558,6 +687,11 @@ mod tests {
         assert_eq!(media[0].filename, "18437723885/photo-01.jpg");
         assert_eq!(media[1].kind, "video");
         assert_eq!(media[1].filename, "18437723885/video-01.m3u8");
+        assert!(media[0].candidates[0].ends_with("/pic.jpg"));
+        assert!(media[0]
+            .candidates
+            .iter()
+            .any(|u| u.ends_with("/pic-2048x1152.jpg")));
     }
 
     #[test]
@@ -571,24 +705,36 @@ mod tests {
     }
 
     #[test]
-    fn reads_profile_image_from_next_data() {
-        let html = r#"<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"athlete":{"profileImageUrl":"https://dgalywyr863hv.cloudfront.net/pictures/athletes/135539874/30856735/12/medium.jpg"}}}}</script>"#;
+    fn prefers_mp4_over_hls_playlist() {
+        let candidates = video_candidates(&[
+            "https://d35tn3x5zm6xrc.cloudfront.net/clip.m3u8".into(),
+            "https://d35tn3x5zm6xrc.cloudfront.net/clip.mp4".into(),
+        ]);
         assert_eq!(
-            profile_image_url(html).as_deref(),
-            Some(
-                "https://dgalywyr863hv.cloudfront.net/pictures/athletes/135539874/30856735/12/large.jpg"
-            )
+            candidates[0],
+            "https://d35tn3x5zm6xrc.cloudfront.net/clip.mp4"
+        );
+        assert_eq!(
+            candidates[1],
+            "https://d35tn3x5zm6xrc.cloudfront.net/clip.m3u8"
         );
     }
 
     #[test]
     fn picks_largest_api_photo() {
         let json = serde_json::json!([{
-            "urls": {"100": "https://cdn.example/a-100.jpg", "2000": "https://dgtzuqphqg23d.cloudfront.net/a-2000x2000.jpg"}
+            "urls": {
+                "100": "https://dgtzuqphqg23d.cloudfront.net/a-100x100.jpg",
+                "2000": "https://dgtzuqphqg23d.cloudfront.net/a-2000x2000.jpg"
+            }
         }]);
         let photos = photos_from_api(&json, "99");
         assert_eq!(photos.len(), 1);
         assert_eq!(photos[0].url, "https://dgtzuqphqg23d.cloudfront.net/a.jpg");
+        assert_eq!(
+            photos[0].candidates[1],
+            "https://dgtzuqphqg23d.cloudfront.net/a-2000x2000.jpg"
+        );
     }
 
     #[test]

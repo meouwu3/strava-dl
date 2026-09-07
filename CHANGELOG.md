@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.1
+
+- Skip athlete profile avatars.
+- Prefer original photo files, then the largest sized CDN variant.
+- Prefer MP4 video files when present; otherwise download the highest-resolution HLS variant.
+
 ## 0.3.0
 
 - Discover activity photos and videos from athlete pages, photo tabs, monthly calendars, and the official API when the token belongs to that athlete.

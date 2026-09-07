@@ -49,24 +49,31 @@ pub fn write_archive(fetcher: &dyn Fetcher, plan: &ArchivePlan) -> Result<PathBu
 }
 
 fn download_item(fetcher: &dyn Fetcher, item: &Media) -> Result<Vec<u8>> {
-    if item.kind == "video" && item.url.contains("m3u8") {
-        return hls::download(fetcher, &item.url);
-    }
+    let mut last_error = None;
+    let mut urls = item.download_urls();
     if item.kind == "image" {
         let original = original_photo_url(&item.url);
-        if original != item.url {
-            if let Ok(bytes) = fetcher.get_bytes(&original) {
-                if looks_like_media(&bytes) {
-                    return Ok(bytes);
-                }
-            }
+        if !urls.iter().any(|u| u == &original) {
+            urls.insert(0, original);
         }
     }
-    let bytes = fetcher.get_bytes(&item.url)?;
-    if !looks_like_media(&bytes) {
-        anyhow::bail!("response for {} was not media", item.url);
+    for url in urls {
+        let result = if item.kind == "video" && url.contains("m3u8") {
+            hls::download(fetcher, &url)
+        } else {
+            fetcher.get_bytes(&url)
+        };
+        match result {
+            Ok(bytes)
+                if looks_like_media(&bytes) || (item.kind == "video" && !bytes.is_empty()) =>
+            {
+                return Ok(bytes);
+            }
+            Ok(_) => last_error = Some(anyhow::anyhow!("response for {url} was not media")),
+            Err(err) => last_error = Some(err),
+        }
     }
-    Ok(bytes)
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("no download URL for {}", item.url)))
 }
 
 fn unique_path(root: &Path, filename: &str) -> PathBuf {
@@ -166,15 +173,16 @@ mod tests {
             athlete_id: "1".into(),
             output: Output::Folder,
             output_dir: dir.path().to_path_buf(),
-            items: vec![Media::image(
-                "https://dgtzuqphqg23d.cloudfront.net/a.jpg".into(),
-                "https://www.strava.com/athletes/1".into(),
-                "profile.jpg".into(),
-                None,
+            items: vec![Media::with_candidates(
+                "image",
+                vec!["https://dgtzuqphqg23d.cloudfront.net/a.jpg".into()],
+                "https://www.strava.com/activities/1".into(),
+                "1/photo-01.jpg".into(),
+                Some("1".into()),
             )],
         };
         let root = write_archive(&fetcher, &plan).unwrap();
-        assert!(root.join("profile.jpg").exists());
+        assert!(root.join("1/photo-01.jpg").exists());
         assert!(root.join("manifest.json").exists());
 
         let mut zipped = plan.clone();
@@ -183,5 +191,48 @@ mod tests {
         let zip_path = write_archive(&fetcher, &zipped).unwrap();
         assert!(zip_path.ends_with("strava-1.zip"));
         assert!(zip_path.exists());
+    }
+
+    #[test]
+    fn prefers_original_photo_then_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpeg = [0xFFu8, 0xD8, 0xFF, 0xE0]
+            .into_iter()
+            .chain([1u8; 32])
+            .collect::<Vec<_>>();
+        let sized = [0xFFu8, 0xD8, 0xFF, 0xE0]
+            .into_iter()
+            .chain([2u8; 32])
+            .collect::<Vec<_>>();
+        let fetcher = MapFetcher {
+            bytes: HashMap::from([
+                (
+                    "https://dgtzuqphqg23d.cloudfront.net/a.jpg".into(),
+                    jpeg.clone(),
+                ),
+                (
+                    "https://dgtzuqphqg23d.cloudfront.net/a-64x64.jpg".into(),
+                    sized,
+                ),
+            ]),
+        };
+        let plan = ArchivePlan {
+            athlete_id: "1".into(),
+            output: Output::Folder,
+            output_dir: dir.path().to_path_buf(),
+            items: vec![Media::with_candidates(
+                "image",
+                vec![
+                    "https://dgtzuqphqg23d.cloudfront.net/a.jpg".into(),
+                    "https://dgtzuqphqg23d.cloudfront.net/a-64x64.jpg".into(),
+                ],
+                "https://www.strava.com/activities/1".into(),
+                "1/photo-01.jpg".into(),
+                Some("1".into()),
+            )],
+        };
+        let root = write_archive(&fetcher, &plan).unwrap();
+        let bytes = std::fs::read(root.join("1/photo-01.jpg")).unwrap();
+        assert_eq!(bytes[4], 1);
     }
 }

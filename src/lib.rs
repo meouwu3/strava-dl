@@ -37,7 +37,7 @@ pub fn run() -> Result<()> {
     }
     if !authenticated {
         eprintln!(
-            "warning: no --cookie or --token; only publicly visible profile media was requested"
+            "warning: no --cookie or --token; activity photos and videos usually require login"
         );
     }
     let count = items.len();

@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 
 use crate::client::Fetcher;
 use crate::extract::{
-    activity_ids, activity_ids_from_json, is_login_page, media_from_activity_html,
-    parse_json_or_none, photos_from_api, profile_image_url,
+    activity_ids, activity_ids_from_json, is_login_page, media_from_activity_html, media_kind,
+    parse_json_or_none, photo_candidates, photos_from_api, video_candidates,
 };
 use crate::model::Media;
 
@@ -33,13 +33,6 @@ pub fn discover(fetcher: &dyn Fetcher, opts: &DiscoverOpts<'_>) -> Result<Vec<Me
 
     let mut items = Vec::new();
     let mut seen = HashSet::new();
-    if let Some(url) = profile_image_url(&profile) {
-        push_item(
-            &mut items,
-            &mut seen,
-            Media::image(url, profile_url.clone(), "profile.jpg".into(), None),
-        );
-    }
 
     let mut ids = Vec::new();
     let mut id_seen = HashSet::new();
@@ -106,21 +99,20 @@ fn collect_from_photos_pages(
             extend_ids(ids, id_seen, activity_ids_from_json(&json, opts.athlete_id));
         }
         for url in crate::extract::extract_urls(&body) {
-            if let Some(kind) = crate::extract::media_kind(&url) {
-                let filename = crate::extract::filename_from_url(&url, "media.bin");
-                let source = url.clone();
-                let item = if kind == "video" {
-                    Media::video(url, source, filename, None)
-                } else {
-                    Media::image(
-                        crate::extract::original_photo_url(&url),
-                        source,
-                        filename,
-                        None,
-                    )
-                };
-                push_item(items, seen, item);
-            }
+            let Some(kind) = media_kind(&url) else {
+                continue;
+            };
+            let candidates = if kind == "video" {
+                video_candidates(std::slice::from_ref(&url))
+            } else {
+                photo_candidates(std::slice::from_ref(&url))
+            };
+            let Some(preferred) = candidates.first() else {
+                continue;
+            };
+            let filename = crate::extract::filename_from_url(preferred, "media.bin");
+            let item = Media::with_candidates(kind, candidates, url.clone(), filename, None);
+            push_item(items, seen, item);
         }
         if ids.len() == before && page > 1 {
             break;
@@ -284,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn public_profile_returns_profile_image() {
+    fn public_profile_skips_avatar() {
         let html = r#"<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"athlete":{"profileImageUrl":"https://dgalywyr863hv.cloudfront.net/pictures/athletes/135539874/30856735/12/medium.jpg"}}}}</script>"#;
         let fetcher = MapFetcher {
             text: HashMap::from([(
@@ -301,9 +293,7 @@ mod tests {
             max_activities: None,
         };
         let items = discover(&fetcher, &opts).unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].filename, "profile.jpg");
-        assert!(items[0].url.ends_with("/large.jpg"));
+        assert!(items.is_empty());
     }
 
     #[test]
